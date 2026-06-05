@@ -1,0 +1,239 @@
+'use strict';
+
+/**
+ * Persistencia simple en fichero JSON con:
+ *  - Escritura atómica (tmp + rename).
+ *  - Accesos serializados (lock por cola de promesas) anti-carrera.
+ *  - Validación de esquema al cargar (fail-closed: si el fichero está corrupto,
+ *    se arranca con estado vacío en memoria y NO se machaca el fichero hasta
+ *    el siguiente save válido).
+ *
+ * Estructura del estado:
+ * {
+ *   players: {
+ *     [playerId]: {
+ *       playerId, deviceId, name, createdAt,
+ *       profile: { version:int, data:string } | null,
+ *       scores: {                      // mejores valores validados/clampados
+ *         level, billetes, wins, goals
+ *       },
+ *       rate: {                        // estado anti-incrementos para POST /scores
+ *         [metric]: { lastValue:int, lastTimestamp:int }
+ *       }
+ *     }
+ *   },
+ *   tokens:  { [token]: playerId },
+ *   devices: { [deviceId]: playerId }
+ * }
+ */
+
+const fs = require('fs');
+const path = require('path');
+
+const DATA_DIR = path.join(__dirname, 'data');
+const DB_FILE = path.join(DATA_DIR, 'db.json');
+const TMP_FILE = path.join(DATA_DIR, 'db.json.tmp');
+
+function emptyState() {
+  // matches: relay de partidas online por turnos.  seq: contador global de ids.
+  return { players: {}, tokens: {}, devices: {}, matches: {}, seq: 0 };
+}
+
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * Valida (fail-closed) el esquema cargado del disco. Devuelve un estado
+ * saneado o el estado vacío si algo no cuadra.
+ */
+function sanitizeState(raw) {
+  if (!isPlainObject(raw)) return emptyState();
+  if (!isPlainObject(raw.players) || !isPlainObject(raw.tokens) || !isPlainObject(raw.devices)) {
+    return emptyState();
+  }
+  // Confiamos en lo que validamos al escribir; aquí hacemos chequeos básicos.
+  const state = emptyState();
+  for (const [pid, p] of Object.entries(raw.players)) {
+    if (!isPlainObject(p)) continue;
+    if (typeof p.playerId !== 'string') continue;
+    const scores = isPlainObject(p.scores) ? p.scores : {};
+    const rate = isPlainObject(p.rate) ? p.rate : {};
+    state.players[pid] = {
+      playerId: p.playerId,
+      deviceId: typeof p.deviceId === 'string' ? p.deviceId : '',
+      name: typeof p.name === 'string' ? p.name : '',
+      createdAt: Number.isInteger(p.createdAt) ? p.createdAt : 0,
+      profile: isPlainObject(p.profile) &&
+        Number.isInteger(p.profile.version) &&
+        typeof p.profile.data === 'string'
+        ? { version: p.profile.version, data: p.profile.data }
+        : null,
+      scores: {
+        level: Number.isInteger(scores.level) ? scores.level : 0,
+        billetes: Number.isInteger(scores.billetes) ? scores.billetes : 0,
+        wins: Number.isInteger(scores.wins) ? scores.wins : 0,
+        goals: Number.isInteger(scores.goals) ? scores.goals : 0
+      },
+      rate: isPlainObject(rate) ? rate : {},
+      // ---- Social/online ----
+      lastSeen: Number.isInteger(p.lastSeen) ? p.lastSeen : 0,
+      friends: Array.isArray(p.friends) ? p.friends.filter((x) => typeof x === 'string') : [],
+      challenges: Array.isArray(p.challenges) ? p.challenges.filter(isPlainObject).slice(-40) : [],
+      chats: Array.isArray(p.chats) ? p.chats.filter(isPlainObject).slice(-60) : [],
+      matchId: typeof p.matchId === 'string' ? p.matchId : null
+    };
+  }
+  state.seq = Number.isInteger(raw.seq) ? raw.seq : 0;
+  if (isPlainObject(raw.matches)) {
+    for (const [mid, m] of Object.entries(raw.matches)) {
+      if (isPlainObject(m) && typeof m.a === 'string' && typeof m.b === 'string') state.matches[mid] = m;
+    }
+  }
+  for (const [token, pid] of Object.entries(raw.tokens)) {
+    if (typeof token === 'string' && typeof pid === 'string' && state.players[pid]) {
+      state.tokens[token] = pid;
+    }
+  }
+  for (const [deviceId, pid] of Object.entries(raw.devices)) {
+    if (typeof deviceId === 'string' && typeof pid === 'string' && state.players[pid]) {
+      state.devices[deviceId] = pid;
+    }
+  }
+  return state;
+}
+
+class Store {
+  constructor() {
+    this.state = emptyState();
+    this._chain = Promise.resolve(); // cola de serialización para escrituras
+    this._load();
+  }
+
+  _load() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      if (fs.existsSync(DB_FILE)) {
+        const raw = fs.readFileSync(DB_FILE, 'utf8');
+        const parsed = JSON.parse(raw);
+        this.state = sanitizeState(parsed);
+      } else {
+        this.state = emptyState();
+      }
+    } catch (err) {
+      // Fail-closed: estado vacío en memoria, no tocamos el fichero corrupto.
+      // (Logging mínimo, sin filtrar detalles a clientes.)
+      // eslint-disable-next-line no-console
+      console.error('[store] No se pudo cargar db.json, arranco con estado vacío:', err.message);
+      this.state = emptyState();
+    }
+  }
+
+  /**
+   * Persiste el estado actual de forma atómica. Las llamadas se serializan
+   * mediante una cola de promesas para evitar escrituras concurrentes.
+   */
+  save() {
+    const snapshot = JSON.stringify(this.state, null, 2);
+    this._chain = this._chain.then(() => this._atomicWrite(snapshot)).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[store] Error al persistir:', err.message);
+    });
+    return this._chain;
+  }
+
+  _atomicWrite(contents) {
+    return new Promise((resolve, reject) => {
+      fs.mkdir(DATA_DIR, { recursive: true }, (mkErr) => {
+        if (mkErr) return reject(mkErr);
+        fs.writeFile(TMP_FILE, contents, 'utf8', (wErr) => {
+          if (wErr) return reject(wErr);
+          fs.rename(TMP_FILE, DB_FILE, (rErr) => {
+            if (rErr) return reject(rErr);
+            resolve();
+          });
+        });
+      });
+    });
+  }
+
+  // ---- Helpers de dominio -------------------------------------------------
+
+  getPlayerByToken(token) {
+    if (typeof token !== 'string') return null;
+    const pid = this.state.tokens[token];
+    if (!pid) return null;
+    return this.state.players[pid] || null;
+  }
+
+  getPlayerByDevice(deviceId) {
+    const pid = this.state.devices[deviceId];
+    if (!pid) return null;
+    return this.state.players[pid] || null;
+  }
+
+  createPlayer(playerId, deviceId, name, token, now) {
+    const player = {
+      playerId,
+      deviceId,
+      name,
+      createdAt: now,
+      profile: null,
+      scores: { level: 0, billetes: 0, wins: 0, goals: 0 },
+      // Línea base de tasa sembrada en la creación de la cuenta: lastValue=0 y
+      // lastTimestamp=createdAt para CADA métrica. Así el PRIMER POST /scores
+      // ya queda sujeto al control de tasa (RATE_LIMITS) y a la ventana mínima
+      // (MIN_WINDOW_MS), cerrando el bypass de "primera observación = sin clamp"
+      // y el reset de línea base creando cuentas nuevas por deviceId.
+      rate: {
+        level: { lastValue: 0, lastTimestamp: now },
+        billetes: { lastValue: 0, lastTimestamp: now },
+        wins: { lastValue: 0, lastTimestamp: now },
+        goals: { lastValue: 0, lastTimestamp: now }
+      },
+      // ---- Social/online ----
+      lastSeen: now,
+      friends: [],
+      challenges: [],   // retos entrantes pendientes
+      chats: [],        // mensajes privados entrantes (capados)
+      matchId: null     // partida online en curso
+    };
+    this.state.players[playerId] = player;
+    this.state.devices[deviceId] = playerId;
+    this.state.tokens[token] = playerId;
+    return player;
+  }
+
+  /** Devuelve el token existente de un jugador, o crea uno nuevo. */
+  ensureTokenFor(playerId, newTokenFactory) {
+    for (const [tok, pid] of Object.entries(this.state.tokens)) {
+      if (pid === playerId) return tok;
+    }
+    const tok = newTokenFactory();
+    this.state.tokens[tok] = playerId;
+    return tok;
+  }
+
+  allPlayers() {
+    return Object.values(this.state.players);
+  }
+
+  getPlayerById(id) {
+    if (typeof id !== 'string') return null;
+    return this.state.players[id] || null;
+  }
+
+  /** Id único incremental (para retos, chats y partidas). */
+  nextSeq() {
+    this.state.seq = (this.state.seq || 0) + 1;
+    return this.state.seq;
+  }
+
+  matches() {
+    return this.state.matches;
+  }
+}
+
+module.exports = { Store, DATA_DIR, DB_FILE };

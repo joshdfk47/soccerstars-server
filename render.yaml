@@ -1,0 +1,19 @@
+## Despliegue en Render (1 clic con Blueprint).
+## En Render: New > Blueprint > conecta este repo. Te dará una URL pública
+## tipo https://soccerstars-server.onrender.com  (esa + /api/v1 va en el cliente).
+services:
+  - type: web
+    name: soccerstars-server
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    autoDeploy: true
+    envVars:
+      - key: TRUST_PROXY
+        value: "1"
+    ## Disco para que NO se borren las cuentas al reiniciar (opcional pero recomendado).
+    disk:
+      name: data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
