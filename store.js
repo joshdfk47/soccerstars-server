@@ -87,7 +87,12 @@ function sanitizeState(raw) {
   state.seq = Number.isInteger(raw.seq) ? raw.seq : 0;
   if (isPlainObject(raw.matches)) {
     for (const [mid, m] of Object.entries(raw.matches)) {
-      if (isPlainObject(m) && typeof m.a === 'string' && typeof m.b === 'string') state.matches[mid] = m;
+      if (isPlainObject(m) && typeof m.a === 'string' && typeof m.b === 'string') {
+        if (typeof m.state !== 'string') m.state = null;        // estado-último (no persistido, default seguro)
+        if (typeof m.stateBy !== 'string') m.stateBy = null;
+        if (!Number.isInteger(m.stateTs)) m.stateTs = 0;
+        state.matches[mid] = m;
+      }
     }
   }
   for (const [token, pid] of Object.entries(raw.tokens)) {
