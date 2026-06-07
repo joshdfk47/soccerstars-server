@@ -34,6 +34,12 @@ const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const TMP_FILE = path.join(DATA_DIR, 'db.json.tmp');
 
+// ---- Persistencia REMOTA en un archivo JSON (JSONBin.io) para que NO se borre al reiniciar Render free ----
+// Configúralo en Render con env vars: JSONBIN_ID (id del bin) y JSONBIN_KEY (X-Master-Key). Si faltan, solo archivo local.
+const JSONBIN_ID = process.env.JSONBIN_ID || '';
+const JSONBIN_KEY = process.env.JSONBIN_KEY || '';
+const REMOTE_ON = !!(JSONBIN_ID && JSONBIN_KEY);
+
 function emptyState() {
   // matches: relay de partidas online por turnos.  seq: contador global de ids.
   return { players: {}, tokens: {}, devices: {}, matches: {}, seq: 0 };
@@ -146,7 +152,32 @@ class Store {
       // eslint-disable-next-line no-console
       console.error('[store] Error al persistir:', err.message);
     });
+    this._remoteSave();   // backup al JSON remoto (debounced)
     return this._chain;
+  }
+
+  // Carga el estado del JSON remoto (JSONBin) al arrancar -> sobrevive a reinicios de Render free.
+  async loadRemote() {
+    if (!REMOTE_ON) return;
+    try {
+      const r = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}/latest`, { headers: { 'X-Master-Key': JSONBIN_KEY } });
+      if (!r.ok) { console.error('[store] carga remota HTTP', r.status); return; }
+      const j = await r.json();
+      if (j && j.record && j.record.players) { this.state = sanitizeState(j.record); console.log('[store] estado cargado del JSON remoto'); }
+    } catch (e) { console.error('[store] error carga remota:', e.message); }
+  }
+
+  // Guarda el estado en el JSON remoto, con debounce de 6s (no machacar la API).
+  _remoteSave() {
+    if (!REMOTE_ON) return;
+    clearTimeout(this._remoteT);
+    this._remoteT = setTimeout(() => {
+      fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY },
+        body: JSON.stringify(this.state)
+      }).catch((e) => console.error('[store] error guardado remoto:', e.message));
+    }, 6000);
   }
 
   _atomicWrite(contents) {
