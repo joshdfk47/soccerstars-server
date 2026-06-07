@@ -187,6 +187,7 @@ class Store {
       createdAt: now,
       profile: null,
       scores: { level: 0, billetes: 0, wins: 0, goals: 0 },
+      rankstats: { pj: 0, pg: 0, pe: 0, pp: 0, gf: 0, gc: 0, div: 0, ts: 0 }, // snapshot de stats para el RANKING completo
       // Línea base de tasa sembrada en la creación de la cuenta: lastValue=0 y
       // lastTimestamp=createdAt para CADA métrica. Así el PRIMER POST /scores
       // ya queda sujeto al control de tasa (RATE_LIMITS) y a la ventana mínima
