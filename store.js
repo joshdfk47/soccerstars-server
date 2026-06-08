@@ -42,7 +42,8 @@ const REMOTE_ON = !!(JSONBIN_ID && JSONBIN_KEY);
 
 function emptyState() {
   // matches: relay de partidas online por turnos.  seq: contador global de ids.
-  return { players: {}, tokens: {}, devices: {}, matches: {}, seq: 0 };
+  // accounts: índice usuario(minúsculas) -> playerId (CUENTAS con contraseña, para entrar desde cualquier dispositivo).
+  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, seq: 0 };
 }
 
 function isPlainObject(v) {
@@ -69,6 +70,8 @@ function sanitizeState(raw) {
       playerId: p.playerId,
       deviceId: typeof p.deviceId === 'string' ? p.deviceId : '',
       name: typeof p.name === 'string' ? p.name : '',
+      username: typeof p.username === 'string' ? p.username : '',   // CUENTA: usuario (minúsculas) para login con contraseña
+      passHash: typeof p.passHash === 'string' ? p.passHash : '',   // CUENTA: hash SHA-256 de la contraseña
       createdAt: Number.isInteger(p.createdAt) ? p.createdAt : 0,
       profile: isPlainObject(p.profile) &&
         Number.isInteger(p.profile.version) &&
@@ -109,6 +112,13 @@ function sanitizeState(raw) {
   for (const [deviceId, pid] of Object.entries(raw.devices)) {
     if (typeof deviceId === 'string' && typeof pid === 'string' && state.players[pid]) {
       state.devices[deviceId] = pid;
+    }
+  }
+  if (isPlainObject(raw.accounts)) {
+    for (const [uname, pid] of Object.entries(raw.accounts)) {
+      if (typeof uname === 'string' && typeof pid === 'string' && state.players[pid]) {
+        state.accounts[uname] = pid;
+      }
     }
   }
   return state;
@@ -215,6 +225,8 @@ class Store {
       playerId,
       deviceId,
       name,
+      username: '',   // CUENTA con contraseña (se rellena en /auth/account); '' = solo dispositivo
+      passHash: '',
       createdAt: now,
       profile: null,
       scores: { level: 0, billetes: 0, wins: 0, goals: 0 },
@@ -238,9 +250,19 @@ class Store {
       matchId: null     // partida online en curso
     };
     this.state.players[playerId] = player;
-    this.state.devices[deviceId] = playerId;
+    if (deviceId) this.state.devices[deviceId] = playerId;   // las CUENTAS no tienen deviceId
     this.state.tokens[token] = playerId;
     return player;
+  }
+
+  // ---- CUENTAS (usuario + contraseña, para entrar desde cualquier dispositivo) ----
+  getPlayerByAccount(uname) {
+    if (typeof uname !== 'string') return null;
+    const pid = this.state.accounts[uname];
+    return pid ? this.state.players[pid] || null : null;
+  }
+  registerAccount(uname, playerId) {
+    this.state.accounts[uname] = playerId;
   }
 
   /** Devuelve el token existente de un jugador, o crea uno nuevo. */
