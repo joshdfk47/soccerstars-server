@@ -43,7 +43,7 @@ const REMOTE_ON = !!(JSONBIN_ID && JSONBIN_KEY);
 function emptyState() {
   // matches: relay de partidas online por turnos.  seq: contador global de ids.
   // accounts: índice usuario(minúsculas) -> playerId (CUENTAS con contraseña, para entrar desde cualquier dispositivo).
-  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, seq: 0 };
+  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, event: null, seq: 0 };
 }
 
 function isPlainObject(v) {
