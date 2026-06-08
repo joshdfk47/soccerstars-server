@@ -43,7 +43,8 @@ const REMOTE_ON = !!(JSONBIN_ID && JSONBIN_KEY);
 function emptyState() {
   // matches: relay de partidas online por turnos.  seq: contador global de ids.
   // accounts: índice usuario(minúsculas) -> playerId (CUENTAS con contraseña, para entrar desde cualquier dispositivo).
-  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, event: null, seq: 0 };
+  // clubs: clanes (clubId -> {id,name,tag,ownerId,members[],createdAt}).
+  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, event: null, seq: 0 };
 }
 
 function isPlainObject(v) {
@@ -72,6 +73,7 @@ function sanitizeState(raw) {
       name: typeof p.name === 'string' ? p.name : '',
       username: typeof p.username === 'string' ? p.username : '',   // CUENTA: usuario (minúsculas) para login con contraseña
       passHash: typeof p.passHash === 'string' ? p.passHash : '',   // CUENTA: hash SHA-256 de la contraseña
+      clubId: typeof p.clubId === 'string' ? p.clubId : '',         // CLAN al que pertenece ('' = ninguno)
       createdAt: Number.isInteger(p.createdAt) ? p.createdAt : 0,
       profile: isPlainObject(p.profile) &&
         Number.isInteger(p.profile.version) &&
@@ -118,6 +120,19 @@ function sanitizeState(raw) {
     for (const [uname, pid] of Object.entries(raw.accounts)) {
       if (typeof uname === 'string' && typeof pid === 'string' && state.players[pid]) {
         state.accounts[uname] = pid;
+      }
+    }
+  }
+  if (isPlainObject(raw.clubs)) {
+    for (const [cid, c] of Object.entries(raw.clubs)) {
+      if (isPlainObject(c) && typeof c.id === 'string' && typeof c.name === 'string' && Array.isArray(c.members)) {
+        state.clubs[cid] = {
+          id: c.id, name: c.name,
+          tag: typeof c.tag === 'string' ? c.tag : '',
+          ownerId: typeof c.ownerId === 'string' ? c.ownerId : '',
+          members: c.members.filter((x) => typeof x === 'string'),
+          createdAt: Number.isInteger(c.createdAt) ? c.createdAt : 0
+        };
       }
     }
   }
@@ -227,6 +242,7 @@ class Store {
       name,
       username: '',   // CUENTA con contraseña (se rellena en /auth/account); '' = solo dispositivo
       passHash: '',
+      clubId: '',     // CLAN al que pertenece
       createdAt: now,
       profile: null,
       scores: { level: 0, billetes: 0, wins: 0, goals: 0 },
@@ -263,6 +279,16 @@ class Store {
   }
   registerAccount(uname, playerId) {
     this.state.accounts[uname] = playerId;
+  }
+
+  // ---- CLANES ----
+  getClub(id) {
+    if (typeof id !== 'string') return null;
+    return this.state.clubs[id] || null;
+  }
+  clubNameTaken(name) {
+    const n = name.toLowerCase();
+    return Object.values(this.state.clubs).some((c) => (c.name || '').toLowerCase() === n);
   }
 
   /** Devuelve el token existente de un jugador, o crea uno nuevo. */
