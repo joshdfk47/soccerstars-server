@@ -49,7 +49,8 @@ function emptyState() {
   // matches: relay de partidas online por turnos.  seq: contador global de ids.
   // accounts: índice usuario(minúsculas) -> playerId (CUENTAS con contraseña, para entrar desde cualquier dispositivo).
   // clubs: clanes (clubId -> {id,name,tag,ownerId,members[],createdAt}).
-  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, event: null, seq: 0, playerTokens: {}, clubNames: {}, clubTags: {} };
+  // leagues: ligas online por temporada (lid -> {id,name,ownerId,division,status,members[],fixtures[],eliminated[],startAt,endAt,createdAt}).
+  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, leagues: {}, event: null, seq: 0, playerTokens: {}, clubNames: {}, clubTags: {} };
 }
 
 function isPlainObject(v) {
@@ -97,7 +98,11 @@ function sanitizeState(raw) {
       friends: Array.isArray(p.friends) ? p.friends.filter((x) => typeof x === 'string') : [],
       challenges: Array.isArray(p.challenges) ? p.challenges.filter(isPlainObject).slice(-40) : [],
       chats: Array.isArray(p.chats) ? p.chats.filter(isPlainObject).slice(-60) : [],
-      matchId: typeof p.matchId === 'string' ? p.matchId : null
+      matchId: typeof p.matchId === 'string' ? p.matchId : null,
+      // RANKING + LIGA: ahora SÍ persisten al recargar (antes rankstats se perdía y se repoblaba por reenvío del cliente).
+      rankstats: isPlainObject(p.rankstats) ? p.rankstats : { pj: 0, pg: 0, pe: 0, pp: 0, gf: 0, gc: 0, div: 0, ts: 0 },
+      leagueId: typeof p.leagueId === 'string' ? p.leagueId : '',
+      division: Number.isInteger(p.division) ? p.division : 0   // división ONLINE de liga (0 Bronce … 5 Leyenda)
     };
   }
   state.seq = Number.isInteger(raw.seq) ? raw.seq : 0;
@@ -147,6 +152,33 @@ function sanitizeState(raw) {
         state.clubNames[c.name.toLowerCase()] = cid;
         if (tag) state.clubTags[tag.toUpperCase()] = cid;
       }
+    }
+  }
+  if (isPlainObject(raw.leagues)) {
+    for (const [lid, lg] of Object.entries(raw.leagues)) {
+      if (!isPlainObject(lg) || typeof lg.id !== 'string' || !Array.isArray(lg.members)) continue;
+      state.leagues[lid] = {
+        id: lg.id,
+        name: typeof lg.name === 'string' ? lg.name : '',
+        ownerId: typeof lg.ownerId === 'string' ? lg.ownerId : '',
+        division: Number.isInteger(lg.division) ? lg.division : 0,
+        status: (lg.status === 'open' || lg.status === 'running' || lg.status === 'done') ? lg.status : 'open',
+        members: lg.members.filter((x) => typeof x === 'string'),
+        eliminated: Array.isArray(lg.eliminated) ? lg.eliminated.filter((x) => typeof x === 'string') : [],
+        startAt: Number.isInteger(lg.startAt) ? lg.startAt : 0,
+        endAt: Number.isInteger(lg.endAt) ? lg.endAt : 0,
+        createdAt: Number.isInteger(lg.createdAt) ? lg.createdAt : 0,
+        fixtures: Array.isArray(lg.fixtures) ? lg.fixtures.filter(isPlainObject).map((f) => ({
+          id: typeof f.id === 'string' ? f.id : '',
+          a: typeof f.a === 'string' ? f.a : '',
+          b: typeof f.b === 'string' ? f.b : '',
+          at: Number.isInteger(f.at) ? f.at : 0,
+          ckA: Number.isInteger(f.ckA) ? f.ckA : 0,
+          ckB: Number.isInteger(f.ckB) ? f.ckB : 0,
+          matchId: typeof f.matchId === 'string' ? f.matchId : null,
+          result: (f.result === 'a' || f.result === 'b' || f.result === 'd' || f.result === 'void') ? f.result : null
+        })) : []
+      };
     }
   }
   return state;
@@ -269,6 +301,8 @@ class Store {
       username: '',   // CUENTA con contraseña (se rellena en /auth/account); '' = solo dispositivo
       passHash: '',
       clubId: '',     // CLAN al que pertenece
+      leagueId: '',   // LIGA online en la que está inscrito ('' = ninguna)
+      division: 0,    // división ONLINE de liga (0 Bronce … 5 Leyenda)
       createdAt: now,
       profile: null,
       scores: { level: 0, billetes: 0, wins: 0, goals: 0 },
@@ -306,6 +340,12 @@ class Store {
   }
   registerAccount(uname, playerId) {
     this.state.accounts[uname] = playerId;
+  }
+
+  // ---- LIGAS ----
+  getLeague(id) {
+    if (typeof id !== 'string') return null;
+    return this.state.leagues[id] || null;
   }
 
   // ---- CLANES ----
