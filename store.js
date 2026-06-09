@@ -50,7 +50,7 @@ function emptyState() {
   // accounts: índice usuario(minúsculas) -> playerId (CUENTAS con contraseña, para entrar desde cualquier dispositivo).
   // clubs: clanes (clubId -> {id,name,tag,ownerId,members[],createdAt}).
   // leagues: ligas online por temporada (lid -> {id,name,ownerId,division,status,members[],fixtures[],eliminated[],startAt,endAt,createdAt}).
-  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, leagues: {}, event: null, seq: 0, warWeek: null, playerTokens: {}, clubNames: {}, clubTags: {} };
+  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, leagues: {}, clanWars: {}, event: null, seq: 0, warWeek: null, playerTokens: {}, clubNames: {}, clubTags: {} };
 }
 
 function isPlainObject(v) {
@@ -154,7 +154,8 @@ function sanitizeState(raw) {
           // GUERRA DE CLANES: puntos de la semana, semana a la que pertenecen, y nº de semanas ganadas (deben sobrevivir a reinicios)
           warPoints: Number.isInteger(c.warPoints) ? c.warPoints : 0,
           warWeek: Number.isInteger(c.warWeek) ? c.warWeek : 0,
-          warTitles: Number.isInteger(c.warTitles) ? c.warTitles : 0
+          warTitles: Number.isInteger(c.warTitles) ? c.warTitles : 0,
+          activeWar: typeof c.activeWar === 'string' ? c.activeWar : ''   // id de la guerra DIRECTA en curso ('' = ninguna)
         };
         // Rebuild O(1) lookup indexes.
         state.clubNames[c.name.toLowerCase()] = cid;
@@ -190,6 +191,21 @@ function sanitizeState(raw) {
           gb: Number.isInteger(f.gb) ? f.gb : undefined
         })) : []
       };
+    }
+  }
+  // GUERRAS DIRECTAS clan vs clan (deben sobrevivir a reinicios)
+  if (isPlainObject(raw.clanWars)) {
+    for (const [wid, w] of Object.entries(raw.clanWars)) {
+      if (isPlainObject(w) && typeof w.id === 'string' && typeof w.aClub === 'string' && typeof w.bClub === 'string') {
+        state.clanWars[wid] = {
+          id: w.id, aClub: w.aClub, bClub: w.bClub,
+          aName: typeof w.aName === 'string' ? w.aName : '', bName: typeof w.bName === 'string' ? w.bName : '',
+          scoreA: Number.isInteger(w.scoreA) ? w.scoreA : 0, scoreB: Number.isInteger(w.scoreB) ? w.scoreB : 0,
+          startAt: Number.isInteger(w.startAt) ? w.startAt : 0, endAt: Number.isInteger(w.endAt) ? w.endAt : 0,
+          status: (w.status === 'active' || w.status === 'done') ? w.status : 'active',
+          winner: typeof w.winner === 'string' ? w.winner : ''
+        };
+      }
     }
   }
   return state;
