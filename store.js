@@ -129,9 +129,11 @@ function sanitizeState(raw) {
         state.clubs[cid] = {
           id: c.id, name: c.name,
           tag: typeof c.tag === 'string' ? c.tag : '',
+          logoId: typeof c.logoId === 'string' ? c.logoId : '',
           ownerId: typeof c.ownerId === 'string' ? c.ownerId : '',
           members: c.members.filter((x) => typeof x === 'string'),
-          createdAt: Number.isInteger(c.createdAt) ? c.createdAt : 0
+          createdAt: Number.isInteger(c.createdAt) ? c.createdAt : 0,
+          chat: Array.isArray(c.chat) ? c.chat.filter(isPlainObject).slice(-200) : []
         };
       }
     }
@@ -289,6 +291,10 @@ class Store {
   clubNameTaken(name) {
     const n = name.toLowerCase();
     return Object.values(this.state.clubs).some((c) => (c.name || '').toLowerCase() === n);
+  }
+  clubTagTaken(tag) {
+    const t = tag.toUpperCase();
+    return Object.values(this.state.clubs).some((c) => (c.tag || '').toUpperCase() === t);
   }
 
   /** Devuelve el token existente de un jugador, o crea uno nuevo. */
