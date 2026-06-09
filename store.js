@@ -39,12 +39,17 @@ const TMP_FILE = path.join(DATA_DIR, 'db.json.tmp');
 const JSONBIN_ID = process.env.JSONBIN_ID || '';
 const JSONBIN_KEY = process.env.JSONBIN_KEY || '';
 const REMOTE_ON = !!(JSONBIN_ID && JSONBIN_KEY);
+// Startup warning: if ID is set but KEY is missing, remote persistence is silently disabled.
+if (JSONBIN_ID && !JSONBIN_KEY) {
+  // eslint-disable-next-line no-console
+  console.error('[store] JSONBIN_ID is set but JSONBIN_KEY is missing — remote persistence DISABLED, data will be lost on redeploy');
+}
 
 function emptyState() {
   // matches: relay de partidas online por turnos.  seq: contador global de ids.
   // accounts: índice usuario(minúsculas) -> playerId (CUENTAS con contraseña, para entrar desde cualquier dispositivo).
   // clubs: clanes (clubId -> {id,name,tag,ownerId,members[],createdAt}).
-  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, event: null, seq: 0 };
+  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, event: null, seq: 0, playerTokens: {}, clubNames: {}, clubTags: {} };
 }
 
 function isPlainObject(v) {
@@ -109,6 +114,8 @@ function sanitizeState(raw) {
   for (const [token, pid] of Object.entries(raw.tokens)) {
     if (typeof token === 'string' && typeof pid === 'string' && state.players[pid]) {
       state.tokens[token] = pid;
+      // Rebuild reverse index (last token for a player wins, consistent with ensureTokenFor).
+      state.playerTokens[pid] = token;
     }
   }
   for (const [deviceId, pid] of Object.entries(raw.devices)) {
@@ -126,15 +133,19 @@ function sanitizeState(raw) {
   if (isPlainObject(raw.clubs)) {
     for (const [cid, c] of Object.entries(raw.clubs)) {
       if (isPlainObject(c) && typeof c.id === 'string' && typeof c.name === 'string' && Array.isArray(c.members)) {
+        const tag = typeof c.tag === 'string' ? c.tag : '';
         state.clubs[cid] = {
           id: c.id, name: c.name,
-          tag: typeof c.tag === 'string' ? c.tag : '',
+          tag,
           logoId: typeof c.logoId === 'string' ? c.logoId : '',
           ownerId: typeof c.ownerId === 'string' ? c.ownerId : '',
           members: c.members.filter((x) => typeof x === 'string'),
           createdAt: Number.isInteger(c.createdAt) ? c.createdAt : 0,
           chat: Array.isArray(c.chat) ? c.chat.filter(isPlainObject).slice(-200) : []
         };
+        // Rebuild O(1) lookup indexes.
+        state.clubNames[c.name.toLowerCase()] = cid;
+        if (tag) state.clubTags[tag.toUpperCase()] = cid;
       }
     }
   }
@@ -174,11 +185,16 @@ class Store {
    * mediante una cola de promesas para evitar escrituras concurrentes.
    */
   save() {
-    const snapshot = JSON.stringify(this.state, null, 2);
-    this._chain = this._chain.then(() => this._atomicWrite(snapshot)).catch((err) => {
-      // eslint-disable-next-line no-console
-      console.error('[store] Error al persistir:', err.message);
-    });
+    // Debounce local writes by 200ms to coalesce rapid consecutive saves and
+    // defer JSON.stringify off the hot request path (avoids synchronous event-loop blocking).
+    clearTimeout(this._saveT);
+    this._saveT = setTimeout(() => {
+      const snapshot = JSON.stringify(this.state, null, 2);
+      this._chain = this._chain.then(() => this._atomicWrite(snapshot)).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error('[store] Error al persistir:', err.message);
+      });
+    }, 200);
     this._remoteSave();   // backup al JSON remoto (debounced)
     return this._chain;
   }
@@ -187,7 +203,7 @@ class Store {
   async loadRemote() {
     if (!REMOTE_ON) return;
     try {
-      const r = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}/latest`, { headers: { 'X-Master-Key': JSONBIN_KEY } });
+      const r = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}/latest`, { headers: { 'X-Master-Key': JSONBIN_KEY }, signal: AbortSignal.timeout(8000) });
       if (!r.ok) { console.error('[store] carga remota HTTP', r.status); return; }
       const j = await r.json();
       if (j && j.record && j.record.players) { this.state = sanitizeState(j.record); console.log('[store] estado cargado del JSON remoto'); }
@@ -195,14 +211,21 @@ class Store {
   }
 
   // Guarda el estado en el JSON remoto, con debounce de 6s (no machacar la API).
+  // The state snapshot is captured at call time so mutations during the debounce
+  // window do not race with a subsequent PUT, and a process crash does not silently
+  // lose the data that triggered this save.
   _remoteSave() {
     if (!REMOTE_ON) return;
+    // Capture snapshot now so the debounced PUT sends the state as of this call,
+    // not whatever state happens to be in memory 6 seconds later.
+    const snapshot = JSON.stringify(this.state);
     clearTimeout(this._remoteT);
     this._remoteT = setTimeout(() => {
       fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY },
-        body: JSON.stringify(this.state)
+        body: snapshot,
+        signal: AbortSignal.timeout(10000)
       }).catch((e) => console.error('[store] error guardado remoto:', e.message));
     }, 6000);
   }
@@ -270,6 +293,7 @@ class Store {
     this.state.players[playerId] = player;
     if (deviceId) this.state.devices[deviceId] = playerId;   // las CUENTAS no tienen deviceId
     this.state.tokens[token] = playerId;
+    this.state.playerTokens[playerId] = token;   // reverse index for O(1) ensureTokenFor()
     return player;
   }
 
@@ -289,21 +313,20 @@ class Store {
     return this.state.clubs[id] || null;
   }
   clubNameTaken(name) {
-    const n = name.toLowerCase();
-    return Object.values(this.state.clubs).some((c) => (c.name || '').toLowerCase() === n);
+    return Object.prototype.hasOwnProperty.call(this.state.clubNames, name.toLowerCase());
   }
   clubTagTaken(tag) {
-    const t = tag.toUpperCase();
-    return Object.values(this.state.clubs).some((c) => (c.tag || '').toUpperCase() === t);
+    return Object.prototype.hasOwnProperty.call(this.state.clubTags, tag.toUpperCase());
   }
 
-  /** Devuelve el token existente de un jugador, o crea uno nuevo. */
+  /** Devuelve el token existente de un jugador, o crea uno nuevo. O(1) via reverse index. */
   ensureTokenFor(playerId, newTokenFactory) {
-    for (const [tok, pid] of Object.entries(this.state.tokens)) {
-      if (pid === playerId) return tok;
-    }
+    const existing = this.state.playerTokens[playerId];
+    if (existing && this.state.tokens[existing] === playerId) return existing;
+    // No valid reverse-index entry — create a new token and maintain both maps.
     const tok = newTokenFactory();
     this.state.tokens[tok] = playerId;
+    this.state.playerTokens[playerId] = tok;
     return tok;
   }
 
