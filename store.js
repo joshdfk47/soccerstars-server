@@ -50,7 +50,7 @@ function emptyState() {
   // accounts: índice usuario(minúsculas) -> playerId (CUENTAS con contraseña, para entrar desde cualquier dispositivo).
   // clubs: clanes (clubId -> {id,name,tag,ownerId,members[],createdAt}).
   // leagues: ligas online por temporada (lid -> {id,name,ownerId,division,status,members[],fixtures[],eliminated[],startAt,endAt,createdAt}).
-  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, leagues: {}, event: null, seq: 0, playerTokens: {}, clubNames: {}, clubTags: {} };
+  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, leagues: {}, event: null, seq: 0, warWeek: null, playerTokens: {}, clubNames: {}, clubTags: {} };
 }
 
 function isPlainObject(v) {
@@ -104,10 +104,12 @@ function sanitizeState(raw) {
       leagueId: typeof p.leagueId === 'string' ? p.leagueId : '',
       division: Number.isInteger(p.division) ? p.division : 0,   // división ONLINE de liga (0 Bronce … 5 Leyenda)
       lgReward: Number.isInteger(p.lgReward) ? p.lgReward : 0,   // premio en billetes pendiente de reclamar
-      lgAwards: typeof p.lgAwards === 'string' ? p.lgAwards : ''  // premios de temporada pendientes (CSV: "Campeón,Pichichi,Zamora")
+      lgAwards: typeof p.lgAwards === 'string' ? p.lgAwards : '',  // premios de temporada pendientes (CSV: "Campeón,Pichichi,Zamora")
+      clanReward: Number.isInteger(p.clanReward) ? p.clanReward : 0  // premio de guerra de clanes pendiente (billetes por quedar top-3 la semana)
     };
   }
   state.seq = Number.isInteger(raw.seq) ? raw.seq : 0;
+  state.warWeek = Number.isInteger(raw.warWeek) ? raw.warWeek : null;   // semana de guerra de clanes en curso (para el reset/pago semanal global)
   if (isPlainObject(raw.matches)) {
     for (const [mid, m] of Object.entries(raw.matches)) {
       if (isPlainObject(m) && typeof m.a === 'string' && typeof m.b === 'string') {
@@ -148,7 +150,11 @@ function sanitizeState(raw) {
           ownerId: typeof c.ownerId === 'string' ? c.ownerId : '',
           members: c.members.filter((x) => typeof x === 'string'),
           createdAt: Number.isInteger(c.createdAt) ? c.createdAt : 0,
-          chat: Array.isArray(c.chat) ? c.chat.filter(isPlainObject).slice(-200) : []
+          chat: Array.isArray(c.chat) ? c.chat.filter(isPlainObject).slice(-200) : [],
+          // GUERRA DE CLANES: puntos de la semana, semana a la que pertenecen, y nº de semanas ganadas (deben sobrevivir a reinicios)
+          warPoints: Number.isInteger(c.warPoints) ? c.warPoints : 0,
+          warWeek: Number.isInteger(c.warWeek) ? c.warWeek : 0,
+          warTitles: Number.isInteger(c.warTitles) ? c.warTitles : 0
         };
         // Rebuild O(1) lookup indexes.
         state.clubNames[c.name.toLowerCase()] = cid;
@@ -310,6 +316,7 @@ class Store {
       division: 0,    // división ONLINE de liga (0 Bronce … 5 Leyenda)
       lgReward: 0,    // premio en billetes pendiente de reclamar (lo da el cierre de una liga online)
       lgAwards: '',   // premios de temporada pendientes (CSV: "Campeón,Pichichi,Zamora")
+      clanReward: 0,  // premio de guerra de clanes pendiente (billetes por quedar top-3 la semana)
       createdAt: now,
       profile: null,
       scores: { level: 0, billetes: 0, wins: 0, goals: 0 },
