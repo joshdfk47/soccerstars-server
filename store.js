@@ -102,7 +102,8 @@ function sanitizeState(raw) {
       // RANKING + LIGA: ahora SÍ persisten al recargar (antes rankstats se perdía y se repoblaba por reenvío del cliente).
       rankstats: isPlainObject(p.rankstats) ? p.rankstats : { pj: 0, pg: 0, pe: 0, pp: 0, gf: 0, gc: 0, div: 0, ts: 0 },
       leagueId: typeof p.leagueId === 'string' ? p.leagueId : '',
-      division: Number.isInteger(p.division) ? p.division : 0   // división ONLINE de liga (0 Bronce … 5 Leyenda)
+      division: Number.isInteger(p.division) ? p.division : 0,   // división ONLINE de liga (0 Bronce … 5 Leyenda)
+      lgReward: Number.isInteger(p.lgReward) ? p.lgReward : 0   // premio en billetes pendiente de reclamar
     };
   }
   state.seq = Number.isInteger(raw.seq) ? raw.seq : 0;
@@ -303,6 +304,7 @@ class Store {
       clubId: '',     // CLAN al que pertenece
       leagueId: '',   // LIGA online en la que está inscrito ('' = ninguna)
       division: 0,    // división ONLINE de liga (0 Bronce … 5 Leyenda)
+      lgReward: 0,    // premio en billetes pendiente de reclamar (lo da el cierre de una liga online)
       createdAt: now,
       profile: null,
       scores: { level: 0, billetes: 0, wins: 0, goals: 0 },
