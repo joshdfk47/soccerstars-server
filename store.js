@@ -103,7 +103,8 @@ function sanitizeState(raw) {
       rankstats: isPlainObject(p.rankstats) ? p.rankstats : { pj: 0, pg: 0, pe: 0, pp: 0, gf: 0, gc: 0, div: 0, ts: 0 },
       leagueId: typeof p.leagueId === 'string' ? p.leagueId : '',
       division: Number.isInteger(p.division) ? p.division : 0,   // división ONLINE de liga (0 Bronce … 5 Leyenda)
-      lgReward: Number.isInteger(p.lgReward) ? p.lgReward : 0   // premio en billetes pendiente de reclamar
+      lgReward: Number.isInteger(p.lgReward) ? p.lgReward : 0,   // premio en billetes pendiente de reclamar
+      lgAwards: typeof p.lgAwards === 'string' ? p.lgAwards : ''  // premios de temporada pendientes (CSV: "Campeón,Pichichi,Zamora")
     };
   }
   state.seq = Number.isInteger(raw.seq) ? raw.seq : 0;
@@ -177,7 +178,10 @@ function sanitizeState(raw) {
           ckA: Number.isInteger(f.ckA) ? f.ckA : 0,
           ckB: Number.isInteger(f.ckB) ? f.ckB : 0,
           matchId: typeof f.matchId === 'string' ? f.matchId : null,
-          result: (f.result === 'a' || f.result === 'b' || f.result === 'd' || f.result === 'void') ? f.result : null
+          result: (f.result === 'a' || f.result === 'b' || f.result === 'd' || f.result === 'void') ? f.result : null,
+          // marcador (goles a/b) para premios de temporada (Pichichi/Zamora): debe SOBREVIVIR a reinicios de Render
+          ga: Number.isInteger(f.ga) ? f.ga : undefined,
+          gb: Number.isInteger(f.gb) ? f.gb : undefined
         })) : []
       };
     }
@@ -305,6 +309,7 @@ class Store {
       leagueId: '',   // LIGA online en la que está inscrito ('' = ninguna)
       division: 0,    // división ONLINE de liga (0 Bronce … 5 Leyenda)
       lgReward: 0,    // premio en billetes pendiente de reclamar (lo da el cierre de una liga online)
+      lgAwards: '',   // premios de temporada pendientes (CSV: "Campeón,Pichichi,Zamora")
       createdAt: now,
       profile: null,
       scores: { level: 0, billetes: 0, wins: 0, goals: 0 },
