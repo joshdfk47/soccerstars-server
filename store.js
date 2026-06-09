@@ -255,6 +255,7 @@ class Store {
   }
 
   getPlayerByDevice(deviceId) {
+    if (typeof deviceId !== 'string') return null;
     const pid = this.state.devices[deviceId];
     if (!pid) return null;
     return this.state.players[pid] || null;
@@ -313,10 +314,16 @@ class Store {
     return this.state.clubs[id] || null;
   }
   clubNameTaken(name) {
-    return Object.prototype.hasOwnProperty.call(this.state.clubNames, name.toLowerCase());
+    // Source-of-truth scan: los clubs se crean/borran mutando this.state.clubs
+    // directamente (server.js), por lo que el índice clubNames/clubTags quedaría
+    // desincronizado (clubs creados en caliente no aparecerían, clubs borrados
+    // seguirían "ocupados"). Derivamos del estado real para no romper la unicidad.
+    const n = name.toLowerCase();
+    return Object.values(this.state.clubs).some((c) => (c.name || '').toLowerCase() === n);
   }
   clubTagTaken(tag) {
-    return Object.prototype.hasOwnProperty.call(this.state.clubTags, tag.toUpperCase());
+    const t = tag.toUpperCase();
+    return Object.values(this.state.clubs).some((c) => (c.tag || '').toUpperCase() === t);
   }
 
   /** Devuelve el token existente de un jugador, o crea uno nuevo. O(1) via reverse index. */
