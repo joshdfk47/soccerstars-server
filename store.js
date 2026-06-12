@@ -113,9 +113,11 @@ function sanitizeState(raw) {
   if (isPlainObject(raw.matches)) {
     for (const [mid, m] of Object.entries(raw.matches)) {
       if (isPlainObject(m) && typeof m.a === 'string' && typeof m.b === 'string') {
-        if (typeof m.state !== 'string') m.state = null;        // estado-último (no persistido, default seguro)
+        if (typeof m.state !== 'string') m.state = null;        // estado-último: ahora SÍ persiste (rehidratación del host tras kill/cold-start)
         if (typeof m.stateBy !== 'string') m.stateBy = null;
         if (!Number.isInteger(m.stateTs)) m.stateTs = 0;
+        if (!isPlainObject(m.disconnectedAt)) delete m.disconnectedAt;   // marca de caída por lado (grace/forfeit); validar tipo
+        if (!isPlainObject(m.bg)) delete m.bg;                            // aviso de background por lado (amplía grace)
         state.matches[mid] = m;
       }
     }
