@@ -50,11 +50,29 @@ function emptyState() {
   // accounts: índice usuario(minúsculas) -> playerId (CUENTAS con contraseña, para entrar desde cualquier dispositivo).
   // clubs: clanes (clubId -> {id,name,tag,ownerId,members[],createdAt}).
   // leagues: ligas online por temporada (lid -> {id,name,ownerId,division,status,members[],fixtures[],eliminated[],startAt,endAt,createdAt}).
-  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, leagues: {}, clanWars: {}, event: null, seq: 0, warWeek: null, playerTokens: {}, clubNames: {}, clubTags: {} };
+  // dms: hilos de chat 1-a-1 entre amigos.  key = dmKey(idA,idB) = [a,b].sort().join('|')  ->  Array de mensajes {seq,author,authorId,text,ts}
+  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, leagues: {}, clanWars: {}, event: null, seq: 0, warWeek: null, playerTokens: {}, clubNames: {}, clubTags: {}, dms: {} };
 }
 
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+// Saneo de los hilos DM (chat 1-a-1 de amigos). Patrón idéntico al saneo de c.chat de clubs:
+// por cada key ('idA|idB') conserva un Array de mensajes válidos, capado a los últimos 80.
+function sanitizeDms(raw) {
+  const out = {};
+  for (const [key, thread] of Object.entries(raw)) {
+    if (typeof key !== 'string' || !Array.isArray(thread)) continue;
+    out[key] = thread.filter(isPlainObject).map((m) => ({
+      seq: Number.isInteger(m.seq) ? m.seq : 0,
+      author: typeof m.author === 'string' ? m.author : '',
+      authorId: typeof m.authorId === 'string' ? m.authorId : '',
+      text: typeof m.text === 'string' ? m.text.slice(0, 240) : '',
+      ts: Number.isInteger(m.ts) ? m.ts : 0
+    })).slice(-80);
+  }
+  return out;
 }
 
 /**
@@ -96,6 +114,10 @@ function sanitizeState(raw) {
       // ---- Social/online ----
       lastSeen: Number.isInteger(p.lastSeen) ? p.lastSeen : 0,
       friends: Array.isArray(p.friends) ? p.friends.filter((x) => typeof x === 'string') : [],
+      // SOLICITUDES de amistad (bilaterales): entrantes (otros me piden) y salientes (yo pedí, pendientes).
+      // FAIL-CLOSED: sin esto se perderían al recargar el estado del disco/JSONBin.
+      friendReqs: Array.isArray(p.friendReqs) ? p.friendReqs.filter((x) => typeof x === 'string').slice(-60) : [],
+      friendSent: Array.isArray(p.friendSent) ? p.friendSent.filter((x) => typeof x === 'string').slice(-60) : [],
       challenges: Array.isArray(p.challenges) ? p.challenges.filter(isPlainObject).slice(-40) : [],
       chats: Array.isArray(p.chats) ? p.chats.filter(isPlainObject).slice(-60) : [],
       matchId: typeof p.matchId === 'string' ? p.matchId : null,
@@ -210,6 +232,8 @@ function sanitizeState(raw) {
       }
     }
   }
+  // HILOS DM (chat de amigos): deben sobrevivir a reinicios de Render.
+  state.dms = isPlainObject(raw.dms) ? sanitizeDms(raw.dms) : {};
   return state;
 }
 
@@ -353,6 +377,8 @@ class Store {
       // ---- Social/online ----
       lastSeen: now,
       friends: [],
+      friendReqs: [],   // solicitudes de amistad ENTRANTES (otros me piden), pendientes de aceptar/rechazar
+      friendSent: [],   // solicitudes de amistad SALIENTES (yo pedí), pendientes de respuesta del otro
       challenges: [],   // retos entrantes pendientes
       chats: [],        // mensajes privados entrantes (capados)
       matchId: null     // partida online en curso
