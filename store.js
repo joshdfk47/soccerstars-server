@@ -51,7 +51,7 @@ function emptyState() {
   // clubs: clanes (clubId -> {id,name,tag,ownerId,members[],createdAt}).
   // leagues: ligas online por temporada (lid -> {id,name,ownerId,division,status,members[],fixtures[],eliminated[],startAt,endAt,createdAt}).
   // dms: hilos de chat 1-a-1 entre amigos.  key = dmKey(idA,idB) = [a,b].sort().join('|')  ->  Array de mensajes {seq,author,authorId,text,ts}
-  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, leagues: {}, clanWars: {}, event: null, seq: 0, warWeek: null, playerTokens: {}, clubNames: {}, clubTags: {}, dms: {} };
+  return { players: {}, tokens: {}, devices: {}, accounts: {}, matches: {}, queue: {}, clubs: {}, leagues: {}, clanWars: {}, event: null, seq: 0, warWeek: null, playerTokens: {}, clubNames: {}, clubTags: {}, dms: {}, everEntered: 0 };
 }
 
 function isPlainObject(v) {
@@ -234,6 +234,10 @@ function sanitizeState(raw) {
   }
   // HILOS DM (chat de amigos): deben sobrevivir a reinicios de Render.
   state.dms = isPlainObject(raw.dms) ? sanitizeDms(raw.dms) : {};
+  // CONTADOR "gente que entró online": MONOTÓNICO. No baja aunque se borren cuentas. Si no estaba, parte del nº actual de jugadores.
+  state.everEntered = Number.isInteger(raw.everEntered) && raw.everEntered >= 0
+    ? Math.max(raw.everEntered, Object.keys(state.players).length)
+    : Object.keys(state.players).length;
   return state;
 }
 
@@ -387,7 +391,52 @@ class Store {
     if (deviceId) this.state.devices[deviceId] = playerId;   // las CUENTAS no tienen deviceId
     this.state.tokens[token] = playerId;
     this.state.playerTokens[playerId] = token;   // reverse index for O(1) ensureTokenFor()
+    this.state.everEntered = (this.state.everEntered || 0) + 1;   // MONOTÓNICO: gente que entró online (no baja al borrar)
     return player;
+  }
+
+  // BORRA una cuenta de TODOS lados (índices, amistades, clan, liga, dms, retos, chats). everEntered NO se toca.
+  deletePlayer(pid) {
+    const p = this.state.players[pid];
+    if (!p) return false;
+    // índices: device / cuenta(username) / tokens -> la cuenta deja de existir y no se puede recuperar
+    if (p.deviceId && this.state.devices[p.deviceId] === pid) delete this.state.devices[p.deviceId];
+    if (p.username && this.state.accounts[p.username] === pid) delete this.state.accounts[p.username];
+    const tok = this.state.playerTokens[pid];
+    if (tok) delete this.state.tokens[tok];
+    delete this.state.playerTokens[pid];
+    // referencias en OTROS jugadores: amistades / solicitudes / retos / mensajes
+    for (const id of Object.keys(this.state.players)) {
+      if (id === pid) continue;
+      const o = this.state.players[id]; if (!o) continue;
+      if (Array.isArray(o.friends)) o.friends = o.friends.filter((x) => x !== pid);
+      if (Array.isArray(o.friendReqs)) o.friendReqs = o.friendReqs.filter((x) => x !== pid);
+      if (Array.isArray(o.friendSent)) o.friendSent = o.friendSent.filter((x) => x !== pid);
+      if (Array.isArray(o.challenges)) o.challenges = o.challenges.filter((c) => !c || (c.fromId !== pid && c.from !== pid));
+      if (Array.isArray(o.chats)) o.chats = o.chats.filter((m) => !m || (m.fromId !== pid && m.from !== pid));
+    }
+    // clan: quitar de members de CUALQUIER clan (no fiarse de p.clubId por si hay desync); si era owner -> transferir o borrar vacío
+    for (const cid of Object.keys(this.state.clubs || {})) {
+      const c = this.state.clubs[cid]; if (!c) continue;
+      const was = (c.members || []).length;
+      c.members = (c.members || []).filter((x) => x !== pid);
+      if (c.ownerId !== pid && c.members.length === was) continue;   // no estaba aquí
+      if (c.ownerId === pid) {
+        if (c.members.length > 0) c.ownerId = c.members[0];
+        else { if (this.state.clubNames) delete this.state.clubNames[(c.name || '').toLowerCase()]; if (this.state.clubTags) delete this.state.clubTags[(c.tag || '').toUpperCase()]; delete this.state.clubs[cid]; }
+      }
+    }
+    // ligas: quitar de members
+    for (const lid of Object.keys(this.state.leagues || {})) {
+      const lg = this.state.leagues[lid];
+      if (lg && Array.isArray(lg.members)) lg.members = lg.members.filter((x) => x !== pid);
+    }
+    // dms: borrar los hilos que incluyan a pid (key = [a,b].sort().join('|'))
+    if (this.state.dms) for (const key of Object.keys(this.state.dms)) {
+      if (key.split('|').includes(pid)) delete this.state.dms[key];
+    }
+    delete this.state.players[pid];   // el jugador (everEntered NO se decrementa)
+    return true;
   }
 
   // ---- CUENTAS (usuario + contraseña, para entrar desde cualquier dispositivo) ----
