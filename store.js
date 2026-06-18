@@ -123,6 +123,7 @@ function sanitizeState(raw) {
       matchId: typeof p.matchId === 'string' ? p.matchId : null,
       // RANKING + LIGA: ahora SÍ persisten al recargar (antes rankstats se perdía y se repoblaba por reenvío del cliente).
       rankstats: isPlainObject(p.rankstats) ? p.rankstats : { pj: 0, pg: 0, pe: 0, pp: 0, gf: 0, gc: 0, div: 0, ts: 0 },
+      playerRecords: isPlainObject(p.playerRecords) ? p.playerRecords : null,   // SALÓN DE LA FAMA GLOBAL: mejores chapas de carrera por métrica (saneado en /records/submit)
       leagueId: typeof p.leagueId === 'string' ? p.leagueId : '',
       division: Number.isInteger(p.division) ? p.division : 0,   // división ONLINE de liga (0 Bronce … 5 Leyenda)
       lgReward: Number.isInteger(p.lgReward) ? p.lgReward : 0,   // premio en billetes pendiente de reclamar
