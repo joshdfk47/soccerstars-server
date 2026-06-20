@@ -128,7 +128,11 @@ function sanitizeState(raw) {
       division: Number.isInteger(p.division) ? p.division : 0,   // división ONLINE de liga (0 Bronce … 5 Leyenda)
       lgReward: Number.isInteger(p.lgReward) ? p.lgReward : 0,   // premio en billetes pendiente de reclamar
       lgAwards: typeof p.lgAwards === 'string' ? p.lgAwards : '',  // premios de temporada pendientes (CSV: "Campeón,Pichichi,Zamora")
-      clanReward: Number.isInteger(p.clanReward) ? p.clanReward : 0  // premio de guerra de clanes pendiente (billetes por quedar top-3 la semana)
+      clanReward: Number.isInteger(p.clanReward) ? p.clanReward : 0,  // premio de guerra de clanes pendiente (billetes por quedar top-3 la semana)
+      // LIGA DE FIN DE SEMANA (Weekend League): run semanal de victorias online {wk, played, wins}. Debe sobrevivir a reinicios.
+      wkl: isPlainObject(p.wkl) ? { wk: Number.isInteger(p.wkl.wk) ? p.wkl.wk : -1, played: Number.isInteger(p.wkl.played) ? p.wkl.played : 0, wins: Number.isInteger(p.wkl.wins) ? p.wkl.wins : 0 } : { wk: -1, played: 0, wins: 0 },
+      // APORTACIÓN a la guerra de clanes (contribución personal de la semana) {wk, pts} -> leaderboard de aportación dentro del clan.
+      warContrib: isPlainObject(p.warContrib) ? { wk: Number.isInteger(p.warContrib.wk) ? p.warContrib.wk : 0, pts: Number.isInteger(p.warContrib.pts) ? p.warContrib.pts : 0 } : { wk: 0, pts: 0 }
     };
   }
   state.seq = Number.isInteger(raw.seq) ? raw.seq : 0;
@@ -364,6 +368,8 @@ class Store {
       lgReward: 0,    // premio en billetes pendiente de reclamar (lo da el cierre de una liga online)
       lgAwards: '',   // premios de temporada pendientes (CSV: "Campeón,Pichichi,Zamora")
       clanReward: 0,  // premio de guerra de clanes pendiente (billetes por quedar top-3 la semana)
+      wkl: { wk: -1, played: 0, wins: 0 },   // LIGA DE FIN DE SEMANA: run semanal de victorias online
+      warContrib: { wk: 0, pts: 0 },          // APORTACIÓN personal a la guerra de clanes (semana actual)
       createdAt: now,
       profile: null,
       scores: { level: 0, billetes: 0, wins: 0, goals: 0 },
